@@ -2,7 +2,7 @@
 
 # skillbay
 
-**面向 LangChain 的可插拔技能中间件 —— Claude Code 的 Skill 系统，为后端业务服务重新设计。**
+**适用于 LangChain 的可插拔技能中间件 —— 为业务服务设计的Skill系统**
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
@@ -15,22 +15,26 @@
 
 ## 为什么要有 skillbay
 
-Claude Code 内置了一套相当出色的 Skill 系统：一个 `SKILL.md` 文件就能把一个目录里的
+Anthropic 提出了一套相当出色的 Skill 系统：一个 `SKILL.md` 文件就能把一个目录里的
 流程、参考资料和脚本，变成模型可以按需发现、延迟加载、精确执行的能力。这是目前为止
 对 agent 领域一个经典问题最好的回答之一——*一个 agent 如何同时携带多种专业能力，又不
 撑爆上下文窗口？*
 
-但原系统是为「人在键盘前」的交互式 CLI 设计的。后端 agent 服务的物理环境完全不同：
+这套机制本身是通用的，但原系统是为一个特定场景打造的：开发者的编码与工作台。
+skillbay 要把它搬进另一个场景——**业务服务**：消费级 App 的客服入口（比如美团 App
+里的客服会话）、公司的智能财务 / 人事助手、接入内部系统的运营 copilot。要解的上下文
+窗口难题相同，但运行的地基规则完全不同：
 
-| | Claude Code（交互式 CLI） | 后端 agent 服务 |
+| | Claude Code：编码 / 工作场景 | skillbay：业务服务场景 |
 |---|---|---|
-| 谁来审批高风险动作 | 提示符前的真人 | 没有人——决策必须编码进策略 |
-| 技能从哪来 | 市场、插件、运行时发现 | 你的 git 仓库：经过 review、有版本、随发布 |
-| 进程生命周期 | 单会话、单用户 | 多线程、可恢复、带 checkpoint |
+| 和 agent 对话的人 | 开发者，能自己判断「这条命令该不该跑」 | 终端顾客或普通员工——没人能评审一次工具调用，会话也不可能挂起等一个确认框 |
+| 技能是什么 | 编码工作流，用户随手安装 | 企业的业务能力——退款处理、报销政策、假期查询——由公司拥有，像业务代码一样被治理 |
+| agent 以谁的身份行事 | 开发者本人的账号 | 公司的身份，而顾客从没同意过 agent 内部的任何细节——爆炸半径必须由设计兜底 |
+| 会话形态 | 一个开发者、一个终端会话 | 成千上万路并发会话，带 checkpoint、可恢复 |
 
-**skillbay** 把这套 Skill 系统在语义上 1:1 移植到 LangChain 的 middleware API 上，
-然后在所有「服务端部署场景必然不同」的地方做了刻意的偏离。这些偏离才是本项目真正
-的内容——本文档余下部分逐一解释。
+**skillbay** 因此把这套 Skill 系统在语义上 1:1 移植到 LangChain 的 middleware API
+上，然后在所有「场景使然」（而非机制使然）的地方做了刻意的偏离。这些偏离才是
+本项目真正的内容——本文档余下部分逐一解释。
 
 ## 核心设计：三层渐进式披露
 
@@ -68,8 +72,10 @@ flowchart TB
 
 ### 1. 没有人工审批——"ask" 是 bug，不是状态
 
-参考实现继承了 Claude Code 的三态权限模型（`allow` / `ask` / `deny`）。后端服务没有
-人可问。skillbay 把策略收敛为两态：
+参考实现继承了 Claude Code 的三态权限模型（`allow` / `ask` / `deny`）。但在业务服务
+场景里，和 agent 对话的是顾客与员工——他们既没有能力判断一次工具调用是否安全，进行
+中的会话也不可能为了一个确认框挂起。这个决策属于平台，且必须在部署时做出。skillbay
+把策略收敛为两态：
 
 - `permission_policy` 缝只返回 `allow` 或 `deny`——这就是全部契约。
 - 如果策略仍然返回 `"ask"`，会被**按 deny 处理**，并单独记录一条审计事件
@@ -80,8 +86,11 @@ flowchart TB
 
 ### 2. 技能是部署产物，不是运行时发现
 
-Claude Code 动态发现技能——对个人工具是特性，对业务服务是风险：挂载目录里「冒出」
-一个文件就能改变 agent 行为，没有 review、没有版本、没有回滚。
+在 Claude Code 里，安装技能的人就是被技能影响的人——运行时发现和技能市场是合理的
+自助。业务服务打破了这个对称：公司运营 agent，承担后果的却是顾客和员工。技能的性质
+也不同——退款规则、报销流程、人事政策是业务能力，不是开发者的便利工具。让一个技能
+在挂载目录里「冒出来」，等于把未经评审的行为直接推到顾客面前：没有 review、没有版本、
+没有回滚。
 
 因此 skillbay 在**构造时一次性加载技能集合并锁定**：
 
@@ -92,9 +101,9 @@ Claude Code 动态发现技能——对个人工具是特性，对业务服务�
 
 ### 3. allowed-tools 工具闸：爆炸半径是一等公民约束
 
-技能的 frontmatter 可以声明 `allowed-tools`。该技能生效期间，中间件的
-`wrap_tool_call` 钩子会对**每一次工具调用**强制执行白名单——不是「相信模型会遵守」，
-而是让它根本执行不了。
+业务服务里的 agent 以公司的身份行事——客服技能绝不能触及自身职权之外的工具。技能的
+frontmatter 可以声明 `allowed-tools`；该技能生效期间，中间件的 `wrap_tool_call` 钩子
+会对**每一次工具调用**强制执行白名单——不是「相信模型会遵守」，而是让它根本执行不了。
 
 生效窗口完全从消息历史推导（没有可被污染的额外状态）：
 
@@ -116,9 +125,9 @@ Claude Code 动态发现技能——对个人工具是特性，对业务服务�
 
 ### 5. 记账放在 agent state，而不是进程全局字典
 
-参考实现把已播报/已调用的技能记在模块级 dict 里——单会话 CLI 无所谓，对带
-checkpoint 的多线程服务就是错的。skillbay 把两本账都放进 `SkillState`
-（`AgentState` 扩展），换来三件事：
+参考实现把已播报/已调用的技能记在模块级 dict 里——一个开发者的单会话进程无所谓；
+客服系统要同时服务成千上万路可恢复、带 checkpoint 的会话，这么做就是错的。skillbay
+把两本账都放进 `SkillState`（`AgentState` 扩展），换来三件事：
 
 - **持久化**——记账随 checkpoint 存活；进程恢复后不会重复播报。
 - **隔离**——按 thread 隔离，并发会话互不串扰。
@@ -174,22 +183,22 @@ uv add skillbay            # 或 pip install skillbay
 uv add pyyaml              # 可选：启用完整 YAML frontmatter 解析
 ```
 
-技能就是一个放了 `SKILL.md` 的目录：
+技能就是一个放了 `SKILL.md` 的目录——比如一个客服技能：
 
 ```
 skills/
-└── code-review/
+└── refund-policy/
     └── SKILL.md
 ```
 
 ```markdown
 ---
-description: Review a diff for correctness, security and style issues.
-allowed-tools: Read, Grep
-argument-hint: PR number
-arguments: pr
+description: Handle a refund request according to current company policy.
+allowed-tools: OrderQuery, RefundSubmit
+argument-hint: order ID
+arguments: order
 ---
-Review pull request $pr. Reference files live in ${SKILL_DIR}/checklists.
+Handle the refund request for order $order. The policy checklist lives in ${SKILL_DIR}/policy.md.
 ```
 
 接入任意 LangChain `create_agent` agent：
@@ -199,7 +208,8 @@ from skillbay import SkillMiddleware
 
 mw = SkillMiddleware(
     skills_dirs=["skills"],
-    permission_policy=lambda skill, args: "allow" if skill.name != "dangerous" else "deny",
+    # 部署时定死白名单：只有纳入职权的技能能跑，其余一律拒绝。
+    permission_policy=lambda skill, args: "allow" if skill.name in {"refund-policy", "faq"} else "deny",
     audit=lambda event: print(event),  # 接到你的可观测性栈
 )
 agent = create_agent(model, tools=[...], middleware=[mw])

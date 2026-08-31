@@ -2,7 +2,7 @@
 
 # skillbay
 
-**Pluggable skill middleware for LangChain agents — Claude Code's skill system, re-engineered for backend services.**
+**Pluggable skill middleware for LangChain agents — a skill system designed for business services.**
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
@@ -15,23 +15,28 @@
 
 ## Why skillbay
 
-Claude Code ships a quietly excellent skill system: a `SKILL.md` file turns a folder of
+Anthropic ships a quietly excellent skill system: a `SKILL.md` file turns a folder of
 procedures, references and scripts into something the model can discover on demand, load
 lazily, and follow precisely. It is one of the best answers so far to a recurring agent
 problem — *how does one agent carry many specialties without blowing its context window?*
 
-But the original is built for an interactive CLI with a human at the keyboard. Backend
-agents live under different physics:
+That mechanism is universal, but the original was purpose-built for one scenario: a
+developer's coding and work session. skillbay carries the mechanism into a different
+scenario — **business service agents**: the customer-service entry of a consumer app
+(think of the support chat inside Meituan), an enterprise finance or HR assistant, an
+ops copilot wired into company systems. The context-window problem is the same; the
+ground rules are not:
 
-| | Claude Code (interactive CLI) | Backend agent service |
+| | Claude Code: coding & personal work | skillbay: business service agents |
 |---|---|---|
-| Who approves risky actions | A human, at a prompt | Nobody — the decision must be encoded in policy |
-| Where skills come from | Marketplaces, plugins, runtime discovery | Your git repo: reviewed, versioned, shipped |
-| Process lifetime | One session, one user | Many threads, resumable, checkpointed |
+| Who talks to the agent | A developer, able to judge "should this run?" | An end customer or an employee — nobody able to review a tool call, and no conversation that can hang on a confirmation prompt |
+| What a skill is | A coding workflow, installed ad hoc by its user | A business capability — refund handling, reimbursement policy, leave inquiry — owned by the company and governed like any business code |
+| Whose authority the agent acts with | The developer's own account | The company's — customers never opted into the agent's internals, so blast radius must be bounded by design |
+| Session shape | One developer, one terminal session | Thousands of concurrent conversations, checkpointed and resumable |
 
-**skillbay** ports the skill system 1:1 in semantics onto LangChain's middleware API, then
-deliberately diverges from the original wherever a server-side deployment demands it. The
-divergences are the interesting part — the rest of this document explains them.
+**skillbay** therefore ports the skill system 1:1 in semantics onto LangChain's middleware
+API, then deliberately diverges wherever the scenario — not the mechanics — demands it.
+The divergences are the interesting part — the rest of this document explains them.
 
 ## Core design: three-layer progressive disclosure
 
@@ -74,8 +79,10 @@ body-sized cost only for the skill actually in use.
 ### 1. No human approval — "ask" is a bug, not a state
 
 The reference implementation inherits Claude Code's three-state permission model
-(`allow` / `ask` / `deny`). A backend service has no one to ask. skillbay collapses the
-policy to two states:
+(`allow` / `ask` / `deny`). In a service scenario the person on the other end is a
+customer or an employee — not someone who can judge whether a tool call is safe, and a
+live conversation cannot hang on a confirmation dialog. The decision belongs to the
+platform, and it is made at deploy time. skillbay collapses the policy to two states:
 
 - The `permission_policy` seam returns `allow` or `deny` — that's the whole contract.
 - If a policy returns `"ask"` anyway, it is **treated as deny** and recorded as a distinct
@@ -86,9 +93,13 @@ policy to two states:
 
 ### 2. Skills are deploy artifacts, not runtime discoveries
 
-Claude Code discovers skills dynamically — that's a feature for a personal tool. For a
-business service it is a liability: a file "appearing" in a mounted directory would change
-agent behavior with no review, no version, no rollback.
+In Claude Code, the person who installs a skill is the person it affects — runtime
+discovery and marketplaces are reasonable self-service. A business service breaks that
+symmetry: the company operates the agent while customers and employees bear the
+consequences. And the skills differ in kind — refund rules, reimbursement workflows and
+HR policies are business capabilities, not developer conveniences. A skill "appearing"
+in a mounted directory would put unreviewed behavior in front of customers, with no
+review, no version, no rollback.
 
 skillbay therefore loads the skill set **once, at construction, and freezes it**:
 
@@ -99,9 +110,10 @@ skillbay therefore loads the skill set **once, at construction, and freezes it**
 
 ### 3. The allowed-tools gate: blast radius as a first-class constraint
 
-A skill's frontmatter can declare `allowed-tools`. While that skill is active, the
-middleware's `wrap_tool_call` hook **enforces** the whitelist on every single tool call —
-the model is not trusted to comply, it is prevented.
+A service agent acts with the company's authority: a customer-service skill must never
+reach beyond its charter. A skill's frontmatter can declare `allowed-tools`; while that
+skill is active, the middleware's `wrap_tool_call` hook **enforces** the whitelist on
+every single tool call — the model is not trusted to comply, it is prevented.
 
 The enforcement window is derived purely from the message history (no extra state to
 corrupt):
@@ -126,7 +138,8 @@ Every activation path re-checks the policy:
 ### 5. Accounting lives in agent state, not process globals
 
 The reference implementation tracks announced/invoked skills in module-level dicts — fine
-for a single-session CLI, wrong for a checkpointed multi-thread service. skillbay puts both
+when one developer owns one process, wrong for a service answering thousands of
+concurrent, checkpointed, resumable conversations. skillbay puts both
 ledgers in `SkillState` (an `AgentState` extension), which buys:
 
 - **Persistence** — accounting survives checkpoint/resume; no duplicate announcements after
@@ -187,22 +200,22 @@ uv add skillbay            # or: pip install skillbay
 uv add pyyaml              # optional: enables full YAML frontmatter parsing
 ```
 
-A skill is just a directory with a `SKILL.md`:
+A skill is just a directory with a `SKILL.md` — here, a customer-service skill:
 
 ```
 skills/
-└── code-review/
+└── refund-policy/
     └── SKILL.md
 ```
 
 ```markdown
 ---
-description: Review a diff for correctness, security and style issues.
-allowed-tools: Read, Grep
-argument-hint: PR number
-arguments: pr
+description: Handle a refund request according to current company policy.
+allowed-tools: OrderQuery, RefundSubmit
+argument-hint: order ID
+arguments: order
 ---
-Review pull request $pr. Reference files live in ${SKILL_DIR}/checklists.
+Handle the refund request for order $order. The policy checklist lives in ${SKILL_DIR}/policy.md.
 ```
 
 Wire it into any LangChain `create_agent` agent:
@@ -212,7 +225,8 @@ from skillbay import SkillMiddleware
 
 mw = SkillMiddleware(
     skills_dirs=["skills"],
-    permission_policy=lambda skill, args: "allow" if skill.name != "dangerous" else "deny",
+    # Deploy-time whitelist: only chartered skills run, everything else is denied.
+    permission_policy=lambda skill, args: "allow" if skill.name in {"refund-policy", "faq"} else "deny",
     audit=lambda event: print(event),  # route to your observability stack
 )
 agent = create_agent(model, tools=[...], middleware=[mw])

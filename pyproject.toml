@@ -1,7 +1,7 @@
 [project]
 name = "skillbay"
 version = "0.1.0"
-description = "Pluggable skill middleware for LangChain agents: Claude Code's skill system re-engineered for backend services."
+description = "Pluggable skill middleware for LangChain agents: a skill system designed for business services."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
