@@ -70,19 +70,15 @@ flowchart TB
 
 ## 业务改造：五处刻意的偏离
 
-### 1. 没有人工审批——"ask" 是 bug，不是状态
+### 1. 没有人工审批——契约只有 allow/deny
 
 参考实现继承了 Claude Code 的三态权限模型（`allow` / `ask` / `deny`）。但在业务服务
 场景里，和 agent 对话的是顾客与员工——他们既没有能力判断一次工具调用是否安全，进行
 中的会话也不可能为了一个确认框挂起。这个决策属于平台，且必须在部署时做出。skillbay
-把策略收敛为两态：
+因此把契约**收敛为两值**：`permission_policy` 缝只返回 `allow` 或 `deny`。任何非
+`allow` 的返回值一律拒绝。
 
-- `permission_policy` 缝只返回 `allow` 或 `deny`——这就是全部契约。
-- 如果策略仍然返回 `"ask"`，会被**按 deny 处理**，并单独记录一条审计事件
-  （`skill_ask_as_deny`）。策略作者会在遥测里看到这个错误，而不是 agent 悄悄挂起
-  或越权放行。
-
-> Fail closed，并让失败可见。这就是审批设计的全部。
+> Fail closed。这就是审批设计的全部。
 
 ### 2. 技能是部署产物，不是运行时发现
 
@@ -143,9 +139,9 @@ frontmatter 可以声明 `allowed-tools`；该技能生效期间，中间件的 
 - **Shell 块默认关闭。** SKILL.md 可以携带内联 `` !`命令` `` 块，其输出会替换块本身。
   这是设计上的任意代码执行，因此必须显式传 `enable_shell_blocks=True`——这是安全
   开关，不是偏好设置。
-- **审计内建。** 六类审计事件（`skill_invoked`、`skill_denied`、`skill_ask_as_deny`、
-  `skill_reinjected`、`skills_announced`、`tool_call_blocked`）经由同一个回调缝发出，
-  接到你的日志/指标栈即可。审计自身的故障不会拖垮 agent。
+- **审计内建。** 五类审计事件（`skill_invoked`、`skill_denied`、`skill_reinjected`、
+  `skills_announced`、`tool_call_blocked`）经由同一个回调缝发出，接到你的日志/指标栈
+  即可。审计自身的故障不会拖垮 agent。
 - **上下文预算与优雅降级。** 清单超出 1% 预算时，各条描述均分剩余额度截断；极端
   情况只播报名字。发现层永远不去挤占任务本身的上下文。
 
@@ -156,7 +152,7 @@ frontmatter 可以声明 `allowed-tools`；该技能生效期间，中间件的 
 | `skill_listing` 附件（增量播报） | `before_model` 钩子：预算化增量清单包进 `<system-reminder>` 的 user 消息 |
 | `SkillTool.call` → newMessages | `@tool skill(skill, args)`：正文展开后作为 ToolMessage 返回 |
 | `invoked_skills`（压缩存活） | `SkillState.skill_invocations` 账本 + `before_model` 重注入 |
-| `checkPermissions`（allow/ask/deny） | 两态 `permission_policy` 缝 + 审计事件；`ask` ≡ deny |
+| `checkPermissions`（allow/ask/deny） | 两值 `permission_policy` 缝；非 `allow` 一律拒绝 |
 | `allowed-tools`（建议性，客户端自觉） | `wrap_tool_call` 硬闸门，窗口从消息历史推导 |
 | 进程级技能账本 | `announced_skills` / `skill_invocations` 放进 `AgentState` |
 

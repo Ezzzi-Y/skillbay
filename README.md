@@ -76,20 +76,17 @@ body-sized cost only for the skill actually in use.
 
 ## Business transformation: five deliberate divergences
 
-### 1. No human approval — "ask" is a bug, not a state
+### 1. No human approval — the contract is allow/deny
 
 The reference implementation inherits Claude Code's three-state permission model
 (`allow` / `ask` / `deny`). In a service scenario the person on the other end is a
 customer or an employee — not someone who can judge whether a tool call is safe, and a
 live conversation cannot hang on a confirmation dialog. The decision belongs to the
-platform, and it is made at deploy time. skillbay collapses the policy to two states:
+platform, and it is made at deploy time. skillbay therefore makes the contract
+**two-valued**: the `permission_policy` seam returns `allow` or `deny` — nothing else.
+Any non-`allow` return value is denied.
 
-- The `permission_policy` seam returns `allow` or `deny` — that's the whole contract.
-- If a policy returns `"ask"` anyway, it is **treated as deny** and recorded as a distinct
-  audit event (`skill_ask_as_deny`), so the policy author sees the mistake in telemetry
-  instead of the agent silently hanging or over-approving.
-
-> Fail closed, and make the failure visible. That is the whole approval design.
+> Fail closed. That is the whole approval design.
 
 ### 2. Skills are deploy artifacts, not runtime discoveries
 
@@ -158,10 +155,10 @@ ledgers in `SkillState` (an `AgentState` extension), which buys:
 - **Shell blocks are off by default.** SKILL.md can carry inline `` !`command` `` blocks whose
   output replaces the block. That is arbitrary code execution by design, so it requires an
   explicit `enable_shell_blocks=True` — a safety switch, not a preference.
-- **Auditability built in.** Six audit events (`skill_invoked`, `skill_denied`,
-  `skill_ask_as_deny`, `skill_reinjected`, `skills_announced`, `tool_call_blocked`) flow
-  through one callback seam; wire it to your logging/metrics stack. Audit failures never
-  take down the agent.
+- **Auditability built in.** Five audit events (`skill_invoked`, `skill_denied`,
+  `skill_reinjected`, `skills_announced`, `tool_call_blocked`) flow through one
+  callback seam; wire it to your logging/metrics stack. Audit failures never take
+  down the agent.
 - **Context budget with graceful degradation.** If the skill listing exceeds its 1% budget,
   descriptions are truncated to an equal share; in extremis only names are announced. The
   discovery layer never crowds out the task itself.
@@ -173,7 +170,7 @@ ledgers in `SkillState` (an `AgentState` extension), which buys:
 | `skill_listing` attachment (incremental) | `before_model` hook: budgeted delta listing in a `<system-reminder>` user message |
 | `SkillTool.call` → newMessages | `@tool skill(skill, args)`: body expanded, returned as a ToolMessage |
 | `invoked_skills` (compaction survival) | `SkillState.skill_invocations` ledger + `before_model` re-injection |
-| `checkPermissions` (allow/ask/deny) | Two-state `permission_policy` seam + audit events; `ask` ≡ deny |
+| `checkPermissions` (allow/ask/deny) | Two-valued `permission_policy` seam; non-`allow` is denied |
 | `allowed-tools` (advisory, client-enforced) | `wrap_tool_call` hard gate, window derived from message history |
 | Process-level skill ledgers | `announced_skills` / `skill_invocations` in `AgentState` |
 

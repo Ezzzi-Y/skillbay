@@ -42,8 +42,7 @@ py 文件头。包已从 `skillkit` 完成改名迁移，现在一律叫 `skillb
 - 技能记账（`announced_skills` / `skill_invocations`）放在 `SkillState`
   （AgentState 扩展），不放进程级 dict——为了随 checkpointer 持久化、按
   thread 隔离、resume 后不重复播报。
-- 权限策略只有两态 allow/deny；返回 "ask" 按 deny 处理并发审计事件
-  （后端服务没有「等人点确认」）。
+- 权限策略契约只有 allow/deny 两个值；非 allow 的返回值一律拒绝。
 - allowed-tools 闸门 `check_allowed_tools` 是纯函数（便于单测）：生效窗口从
   成功的 "Launching skill:" ToolMessage 起，到下一条真实 user 消息止；多个
   技能的白名单取并集；限制只紧不松；窗口内连 skill 工具本身也拦（防提权）。

@@ -55,14 +55,12 @@ def _install_verbose_handler() -> None:
 
 
 # Permission policy seam: (skill, args) -> "allow" | "deny". Backend services
-# resolve permissions at deploy time, so there is no "ask" state at runtime;
-# a legacy "ask" return value is treated as deny and audited.
+# resolve permissions at deploy time; the contract has exactly two values.
 PermissionPolicy = Callable[[Skill, str | None], str]
 
 # Audit event types (the security-relevant moments of the skill system).
 AUDIT_INVOKED = "skill_invoked"  # skill expanded successfully
 AUDIT_DENIED = "skill_denied"  # rejected by the permission policy
-AUDIT_ASK_AS_DENY = "skill_ask_as_deny"  # policy returned "ask"; treated as deny
 AUDIT_REINJECTED = "skill_reinjected"  # body re-injected after summarization
 AUDIT_ANNOUNCED = "skills_announced"  # listing announced (first round or delta)
 AUDIT_TOOL_BLOCKED = "tool_call_blocked"  # blocked by the allowed-tools gate
@@ -335,29 +333,14 @@ class SkillMiddleware(AgentMiddleware):
 
             # -- checkPermissions: two-state policy (allow/deny) --
             decision = mw.permission_policy(found, raw_args)
-            if decision == "deny":
+            if decision != "allow":
                 mw._audit(
                     AUDIT_DENIED,
                     skill=name,
                     args=raw_args,
-                    detail="permission policy returned deny",
+                    detail=f"permission policy returned {decision!r}",
                 )
                 return f"Skill {name} execution blocked by permission policy."
-            if decision != "allow":
-                # No human in the loop: "ask" is treated as deny, with a
-                # distinct audit event so policy authors notice the
-                # unsupported return value.
-                mw._audit(
-                    AUDIT_ASK_AS_DENY,
-                    skill=name,
-                    args=raw_args,
-                    detail=f"permission policy returned {decision!r}; treated as deny",
-                )
-                return (
-                    f"Skill {name} execution blocked by permission policy. "
-                    "(Note: 'ask' is not supported in service mode; "
-                    "the policy must return allow or deny.)"
-                )
 
             # -- call: expand the body and return it as a ToolMessage --
             content = expand_skill(

@@ -5,7 +5,6 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from skillbay import (
     AUDIT_ANNOUNCED,
-    AUDIT_ASK_AS_DENY,
     AUDIT_DENIED,
     AUDIT_INVOKED,
     AuditEvent,
@@ -196,17 +195,18 @@ def test_permission_deny(tmp_path: Path):
     assert [e.event for e in events] == [AUDIT_DENIED]
 
 
-def test_ask_is_treated_as_deny(tmp_path: Path):
+def test_unexpected_policy_return_is_denied(tmp_path: Path):
+    """Any return value other than "allow" is denied."""
     events: list[AuditEvent] = []
     mw = SkillMiddleware(
         skills_dirs=[str(make_skills_dir(tmp_path))],
-        permission_policy=lambda skill, args: "ask",
+        permission_policy=lambda skill, args: "oops",
         audit=events.append,
     )
     result = mw.tools[0].invoke({"skill": "greet", "args": "x"})
     assert "blocked by permission policy" in result
-    assert "'ask' is not supported" in result
-    assert [e.event for e in events] == [AUDIT_ASK_AS_DENY]
+    assert events[0].event == AUDIT_DENIED
+    assert "oops" in events[0].detail
 
 
 def test_audit_and_invocation_events(tmp_path: Path):

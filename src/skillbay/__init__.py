@@ -24,7 +24,6 @@ from .expansion import execute_shell_blocks, substitute_arguments
 from .frontmatter import parse_frontmatter
 from .middleware import (
     AUDIT_ANNOUNCED,
-    AUDIT_ASK_AS_DENY,
     AUDIT_DENIED,
     AUDIT_INVOKED,
     AUDIT_REINJECTED,
@@ -45,7 +44,6 @@ __all__ = [
     "AuditEvent",
     "AUDIT_INVOKED",
     "AUDIT_DENIED",
-    "AUDIT_ASK_AS_DENY",
     "AUDIT_REINJECTED",
     "AUDIT_ANNOUNCED",
     "AUDIT_TOOL_BLOCKED",
