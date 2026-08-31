@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from skillbay import (
     AUDIT_ANNOUNCED,
     AUDIT_DENIED,
+    AUDIT_DISMISSED,
     AUDIT_INVOKED,
     AuditEvent,
     Skill,
@@ -84,7 +85,7 @@ def test_skill_tool_itself_is_blocked_inside_window():
 
 def test_window_closes_on_real_user_message_only():
     msgs = window_messages() + [
-        HumanMessage(wrap_in_system_reminder("announced skills: restricted")),
+        wrap_in_system_reminder("announced skills: restricted"),
     ]
     assert check_allowed_tools(msgs, "Write", RESTRICTED) is not None
     msgs.append(HumanMessage("next task"))
@@ -227,14 +228,18 @@ def test_audit_callback_failure_is_swallowed(tmp_path: Path):
 
 
 def test_before_model_announces_listing_once(tmp_path: Path):
+    from langchain_core.messages import SystemMessage
+
     events: list[AuditEvent] = []
     mw = SkillMiddleware(skills_dirs=[str(make_skills_dir(tmp_path))], audit=events.append)
     state = {"messages": [], "announced_skills": [], "skill_invocations": {}}
 
     updates = mw.before_model(state, None)
     assert updates is not None
-    content = updates["messages"][0].content
-    assert content.startswith("<system-reminder>") and "greet" in content
+    msg = updates["messages"][0]
+    assert isinstance(msg, SystemMessage)
+    content = msg.content
+    assert "greet" in content
     # "manual" is hidden from the listing entirely.
     assert "manual" not in content
     assert updates["announced_skills"] == ["greet", "restricted"]
@@ -251,6 +256,8 @@ def test_before_model_announces_listing_once(tmp_path: Path):
 
 
 def test_before_model_reinjects_summarized_invocations(tmp_path: Path):
+    from langchain_core.messages import SystemMessage
+
     mw = SkillMiddleware(skills_dirs=[str(make_skills_dir(tmp_path))])
     state = {
         "messages": [HumanMessage("task")],
@@ -259,8 +266,9 @@ def test_before_model_reinjects_summarized_invocations(tmp_path: Path):
     }
     updates = mw.before_model(state, None)
     assert updates is not None
-    content = updates["messages"][0].content
-    assert content.startswith("<system-reminder>")
+    msg = updates["messages"][0]
+    assert isinstance(msg, SystemMessage)
+    content = msg.content
     assert "Hello world" in content
     assert updates["skill_invocations"] == {"t1": {"skill": "greet", "args": "world"}}
 
@@ -288,3 +296,153 @@ def test_state_schema_is_skill_state(tmp_path: Path):
 
     mw = SkillMiddleware(skills_dirs=[str(make_skills_dir(tmp_path))])
     assert mw.state_schema is SkillState
+
+
+def test_wrap_in_system_reminder_returns_system_message():
+    """wrap_in_system_reminder should return a SystemMessage, not a string."""
+    from langchain_core.messages import SystemMessage
+
+    result = wrap_in_system_reminder("test content")
+    assert isinstance(result, SystemMessage)
+    assert result.content == "test content"
+
+
+def test_system_message_does_not_reset_allowed_tools_window():
+    """SystemMessage should not close the allowed-tools window."""
+    msgs = window_messages() + [
+        wrap_in_system_reminder("skill listing"),
+    ]
+    # Window should still be open (SystemMessage doesn't close it)
+    assert check_allowed_tools(msgs, "Write", RESTRICTED) is not None
+
+    # Add a real user message to close the window
+    msgs.append(HumanMessage("next task"))
+    assert check_allowed_tools(msgs, "Write", RESTRICTED) is None
+
+
+def test_before_model_injects_system_message_for_listing(tmp_path: Path):
+    """before_model should inject skill listing as SystemMessage."""
+    from langchain_core.messages import SystemMessage
+
+    mw = SkillMiddleware(skills_dirs=[str(make_skills_dir(tmp_path))])
+    state = {"messages": [], "announced_skills": [], "skill_invocations": {}}
+
+    updates = mw.before_model(state, None)
+    assert updates is not None
+
+    # Should be a SystemMessage, not HumanMessage
+    msg = updates["messages"][0]
+    assert isinstance(msg, SystemMessage)
+    assert "greet" in msg.content
+    assert "restricted" in msg.content
+
+
+def test_before_model_reinjects_as_system_message(tmp_path: Path):
+    """Re-injection after summarization should use SystemMessage."""
+    from langchain_core.messages import SystemMessage
+
+    mw = SkillMiddleware(skills_dirs=[str(make_skills_dir(tmp_path))])
+    state = {
+        "messages": [HumanMessage("task")],
+        "announced_skills": ["greet", "restricted", "manual"],
+        "skill_invocations": {"t1": {"skill": "greet", "args": "world"}},
+    }
+
+    updates = mw.before_model(state, None)
+    assert updates is not None
+
+    # Re-injected content should be SystemMessage
+    msg = updates["messages"][0]
+    assert isinstance(msg, SystemMessage)
+    assert "Hello world" in msg.content
+
+
+def test_skill_dismiss_tool_exists(tmp_path: Path):
+    """SkillMiddleware should have a skill_dismiss tool."""
+    mw = SkillMiddleware(skills_dirs=[str(make_skills_dir(tmp_path))])
+    tool_names = [t.name for t in mw.tools]
+    assert "skill_dismiss" in tool_names
+
+
+def test_skill_dismiss_unknown_skill(tmp_path: Path):
+    """skill_dismiss should reject unknown skills."""
+    mw = SkillMiddleware(skills_dirs=[str(make_skills_dir(tmp_path))])
+    dismiss_tool = next(t for t in mw.tools if t.name == "skill_dismiss")
+    result = dismiss_tool.invoke({"skill": "nonexistent"})
+    assert "Unknown skill" in result
+
+
+def test_skill_dismiss_valid_skill(tmp_path: Path):
+    """skill_dismiss should accept valid skills."""
+    events: list[AuditEvent] = []
+    mw = SkillMiddleware(skills_dirs=[str(make_skills_dir(tmp_path))], audit=events.append)
+    dismiss_tool = next(t for t in mw.tools if t.name == "skill_dismiss")
+    result = dismiss_tool.invoke({"skill": "greet", "reason": "no longer needed"})
+    assert "dismissed" in result.lower()
+    assert events[-1].event == AUDIT_DISMISSED
+    assert events[-1].skill == "greet"
+
+
+def test_before_model_tracks_dismissed_skills(tmp_path: Path):
+    """before_model should track dismissed skills in state."""
+    mw = SkillMiddleware(skills_dirs=[str(make_skills_dir(tmp_path))])
+
+    # Simulate a conversation where skill was invoked then dismissed
+    state = {
+        "messages": [
+            HumanMessage("task"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "skill",
+                        "args": {"skill": "greet", "args": "world"},
+                        "id": "t1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "skill_dismiss",
+                        "args": {"skill": "greet", "reason": "task complete"},
+                        "id": "t2",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+        ],
+        "announced_skills": ["greet", "restricted"],
+        "skill_invocations": {"t1": {"skill": "greet", "args": "world"}},
+        "dismissed_skills": {},
+    }
+
+    updates = mw.before_model(state, None)
+    assert updates is not None
+    assert "dismissed_skills" in updates
+    assert updates["dismissed_skills"].get("greet") is True
+
+
+def test_before_model_skips_reinjection_of_dismissed_skill(tmp_path: Path):
+    """before_model should not re-inject dismissed skills."""
+    mw = SkillMiddleware(skills_dirs=[str(make_skills_dir(tmp_path))])
+
+    # State with a dismissed skill
+    state = {
+        "messages": [HumanMessage("task")],
+        "announced_skills": ["greet", "restricted"],
+        "skill_invocations": {"t1": {"skill": "greet", "args": "world"}},
+        "dismissed_skills": {"greet": True},
+    }
+
+    updates = mw.before_model(state, None)
+    # Should have no new messages (dismissed skill not re-injected)
+    # and invocation record should be removed
+    if updates:
+        assert "messages" not in updates or len(updates["messages"]) == 0
+        assert "t1" not in updates.get("skill_invocations", {})
+    else:
+        # No updates means nothing to re-inject
+        assert updates is None

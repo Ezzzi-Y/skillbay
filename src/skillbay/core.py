@@ -1,8 +1,15 @@
-"""Skill data model, directory loading, and the listing formatter.
+"""技能数据模型、目录加载与清单格式化。
+Skill data model, directory loading, and the listing formatter.
+
+技能遵循 `<skills_dir>/<name>/SKILL.md` 约定。靠后的目录在同名冲突时
+覆盖靠前的；通过符号链接或重复父目录加载的副本按 realpath 去重。
 
 Skills follow the `<skills_dir>/<name>/SKILL.md` convention. Later skill
 directories override earlier ones on name conflicts; duplicates loaded
 through symlinks or repeated parents are removed by realpath.
+
+清单格式化器是「发现层」的菜单文本：必须控制在小预算内（上下文窗口的 1%），
+超出时分三级降级。
 
 The listing formatter is the "discovery layer" menu text: it must fit in a
 small budget (1% of the context window) and degrades in three stages when
@@ -22,7 +29,7 @@ from .frontmatter import coerce_description, parse_boolean, parse_frontmatter
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Listing budget (ported from prompt.ts constants and policy)
+# 清单预算常量 / Listing budget constants
 # ---------------------------------------------------------------------------
 
 # The listing may use 1% of the context window (SKILL_BUDGET_CONTEXT_PERCENT).
@@ -45,9 +52,10 @@ def get_char_budget(context_window_tokens: int | None = None) -> int:
 
 
 def _truncate(text: str, max_chars: int) -> str:
-    """Truncate with an ellipsis. Simplified against the reference
-    implementation: len() instead of width-aware truncation is close enough
-    for CJK, where width roughly equals character count."""
+    """用省略号截断 / Truncate with an ellipsis.
+    使用 len() 而非按显示宽度截断——对 CJK 字符来说宽度约等于字符数，足够精确。
+    Uses len() rather than width-aware truncation; close enough for CJK
+    where display width roughly equals character count."""
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 1] + "…"
@@ -96,7 +104,7 @@ def format_skills_within_budget(
 
 
 # ---------------------------------------------------------------------------
-# Skill data model (subset of the reference implementation's PromptCommand)
+# 技能数据模型 / Skill data model
 # ---------------------------------------------------------------------------
 
 
@@ -121,19 +129,21 @@ class Skill:
 
     @property
     def listing_description(self) -> str:
-        """Description shown in the listing; when_to_use is appended (reference semantics)."""
+        """清单中展示的描述；若设置了 when_to_use 则拼接在后面。
+        Description shown in the listing; when_to_use is appended when set."""
         if self.when_to_use:
             return f"{self.description} - {self.when_to_use}"
         return self.description
 
 
 # ---------------------------------------------------------------------------
-# Directory loading (core of the reference load_skills_dir)
+# 目录加载 / Directory loading
 # ---------------------------------------------------------------------------
 
 
 def _parse_paths(frontmatter: dict) -> list[str] | None:
-    """Parse the paths field: strip the /** suffix; an all-** value means unconditional."""
+    """解析 paths 字段：去掉 /** 后缀；全 ** 值表示无条件激活。
+    Parse the paths field: strip the /** suffix; an all-** value means unconditional."""
     if not frontmatter.get("paths"):
         return None
     raw = frontmatter["paths"]
@@ -149,7 +159,9 @@ def _parse_paths(frontmatter: dict) -> list[str] | None:
 
 
 def _parse_tools(value: object) -> list[str]:
-    """Parse the allowed-tools field: accepts a comma/space-separated string
+    """解析 allowed-tools 字段：接受逗号/空格分隔的字符串或列表；
+    "Read, Bash" -> ["Read", "Bash"]。
+    Parse the allowed-tools field: accepts a comma/space-separated string
     or a list; "Read, Bash" -> ["Read", "Bash"]."""
     if not value:
         return []
@@ -165,12 +177,14 @@ def _parse_tools(value: object) -> list[str]:
 
 
 def _load_skill_dir(base_path: str) -> list[Skill]:
-    """Load one skills directory: each subdirectory <name>/SKILL.md is a skill."""
+    """加载单个技能目录：每个 <name>/SKILL.md 子目录即为一个技能。
+    Load one skills directory: each subdirectory <name>/SKILL.md is a skill."""
     if not os.path.isdir(base_path):
         return []
     skills: list[Skill] = []
     for entry_name in sorted(os.listdir(base_path)):
         entry_path = os.path.join(base_path, entry_name)
+        # 只有目录形态的技能才计入，散落的 .md 文件被忽略。
         # Only directory-shaped skills count; loose .md files are ignored.
         if not os.path.isdir(entry_path) and not os.path.islink(entry_path):
             continue
@@ -186,6 +200,7 @@ def _load_skill_dir(base_path: str) -> list[Skill]:
 
         fm = parsed["frontmatter"]
         markdown_content = parsed["content"]
+        # 目录名即技能名；frontmatter 中的 name 仅用于展示。
         # The directory name is the skill name; the frontmatter name is display-only.
         description = coerce_description(fm.get("description"), entry_name)
         if description is None:
@@ -196,6 +211,8 @@ def _load_skill_dir(base_path: str) -> list[Skill]:
             Skill(
                 name=entry_name,
                 description=description,
+                # 绝对路径：展开后的 "Base directory" 头是模型解析正文中
+                # 相对路径的句柄。
                 # Absolute path: the expanded "Base directory" header is the
                 # model's handle for resolving relative paths in the body.
                 base_dir=os.path.abspath(entry_path),
@@ -216,17 +233,20 @@ def _load_skill_dir(base_path: str) -> list[Skill]:
 
 
 def load_skills(skills_dirs: list[str]) -> list[Skill]:
-    """Load skills from multiple directories (public API).
+    """从多个目录加载技能（公共 API）。
+    Load skills from multiple directories (public API).
 
-    Override semantics (same as the reference implementation): later
-    directories take priority and same-named skills shadow earlier ones.
-    Results are then deduplicated by realpath, so a file reached through a
-    symlink or a repeated parent directory loads only once.
+    覆盖语义：靠后的目录优先，同名技能覆盖靠前的。结果按 realpath
+    去重，通过符号链接或重复父目录到达的文件只加载一次。
+    Override semantics: later directories take priority and same-named
+    skills shadow earlier ones. Results are then deduplicated by realpath,
+    so a file reached through a symlink or a repeated parent directory
+    loads only once.
     """
     by_name: dict[str, Skill] = {}
     for d in skills_dirs:
         for skill in _load_skill_dir(d):
-            by_name[skill.name] = skill  # later loads override earlier ones
+            by_name[skill.name] = skill  # 后加载的覆盖先加载的 / later loads override earlier ones
 
     seen_realpaths: dict[str, str] = {}
     result: list[Skill] = []
@@ -234,7 +254,7 @@ def load_skills(skills_dirs: list[str]) -> list[Skill]:
         if skill.base_dir:
             real = os.path.realpath(skill.base_dir)
             if real in seen_realpaths:
-                continue  # same underlying file
+                continue  # 同一底层文件 / same underlying file
             seen_realpaths[real] = skill.name
         result.append(skill)
     return sorted(result, key=lambda s: s.name)

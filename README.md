@@ -22,10 +22,9 @@ problem — *how does one agent carry many specialties without blowing its conte
 
 That mechanism is universal, but the original was purpose-built for one scenario: a
 developer's coding and work session. skillbay carries the mechanism into a different
-scenario — **business service agents**: the customer-service entry of a consumer app
-(think of the support chat inside Meituan), an enterprise finance or HR assistant, an
-ops copilot wired into company systems. The context-window problem is the same; the
-ground rules are not:
+scenario — **business service agents**: a consumer-app support chat, an enterprise
+finance or HR assistant, an ops copilot wired into company systems. The context-window
+problem is the same; the ground rules are not:
 
 | | Claude Code: coding & personal work | skillbay: business service agents |
 |---|---|---|
@@ -40,39 +39,14 @@ The divergences are the interesting part — the rest of this document explains 
 
 ## Core design: three-layer progressive disclosure
 
-The context-window economy is the central constraint. skillbay spends it in three layers,
-each paying only for what the task actually needs:
-
-```mermaid
-flowchart TB
-    subgraph L1["Layer 1 · Discover — ~1% of context"]
-        BM["before_model hook"] -->|"budgeted delta listing"| SR["user message wrapped in system-reminder"]
-    end
-    subgraph L2["Layer 2 · Invoke — full body, on demand"]
-        M["model calls the skill tool"] --> P["permission policy: allow / deny"]
-        P -->|"allow"| X["expand SKILL.md body"]
-        X --> TM["ToolMessage: Launching skill ..."]
-    end
-    subgraph L3["Layer 3 · Reference — pay per file"]
-        TM --> BD["Base directory header + the agent's own file tools"]
-    end
-    G["wrap_tool_call: allowed-tools gate"] -.->|"guards every tool call while a window is open"| M
-```
-
-1. **Discover.** Before every model call, a budgeted menu of available skills is injected
-   as a `<system-reminder>` user message — names and one-line descriptions only, hard-capped
-   at 1% of the context window. The listing announces *deltas only*: with accounting kept in
-   agent state, each skill is announced exactly once per thread, no matter how many turns
-   follow.
-2. **Invoke.** When the model decides a skill matches the task, it calls the `skill` tool.
-   Only then is the full SKILL.md body expanded (arguments substituted, directories resolved)
-   and returned as a ToolMessage.
-3. **Reference.** The expanded body opens with a `Base directory` header. Any sidecar files
-   the skill ships (templates, references, scripts) are read by the agent's *own* file tools,
-   on demand. The middleware ships no file tools — it only provides the path anchor.
-
-The result: a deployment carrying dozens of skills pays a menu-sized cost per turn, and a
-body-sized cost only for the skill actually in use.
+Like other skill systems, skillbay uses progressive disclosure to manage context cost:
+a budgeted menu (~1% of context) is injected every turn via `before_model`; the full
+SKILL.md body loads only when the model invokes the `skill` tool; sidecar files are
+read on demand by the agent's own file tools. The implementation details — delta
+accounting in agent state, 1% budget with graceful degradation, `Base directory` header
+for path resolution — live in the code; the key point is that a deployment carrying
+dozens of skills pays menu-sized cost per turn and body-sized cost only for the skill
+actually in use.
 
 ## Business transformation: five deliberate divergences
 

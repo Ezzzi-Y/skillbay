@@ -13,7 +13,9 @@ from skillbay.expansion import (
 
 
 def _working_bash() -> str | None:
-    """Return a bash that actually runs. On Windows, PATH often resolves to
+    """返回一个可用的 bash。Windows 上 PATH 常指向 WSL 的 bash 存根，
+    未安装发行版时会失败——因此依次探测 PATH 和 Git for Windows 的常见位置。
+    Return a bash that actually runs. On Windows, PATH often resolves to
     WSL's bash stub, which fails when no distro is installed — probe
     candidates (PATH first, then the usual Git for Windows locations)."""
     candidates = [p for p in (shutil.which("bash"),) if p]

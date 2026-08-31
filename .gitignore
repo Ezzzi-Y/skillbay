@@ -8,6 +8,9 @@ build/
 # Virtual environments
 .venv/
 
+# Dependency lock file (library project - let consumers resolve versions)
+uv.lock
+
 # Test and tooling caches
 .pytest_cache/
 .ruff_cache/

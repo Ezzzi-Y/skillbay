@@ -85,6 +85,7 @@ def substitute_arguments(
     return content
 
 
+# 单行 !`...` 块和围栏 ```! 多行块。
 # Single-line !`...` blocks and fenced ```! multi-line blocks.
 _SHELL_BLOCK_RE = re.compile(r"!`([^`]*)`")
 _FENCED_SHELL_RE = re.compile(r"```!\s*\n([\s\S]*?)```")
@@ -96,13 +97,21 @@ def execute_shell_blocks(
     shell: str | None = None,
     timeout: float = 30.0,
 ) -> str:
-    """Execute inline shell blocks and replace each with its stdout.
+    """执行内联 shell 块并用 stdout 替换 / Execute inline shell blocks and replace each with its stdout.
+
+    安全说明：此函数执行技能作者编写的任意命令，调用方必须显式开启
+    （enable_shell_blocks），默认关闭。后端服务中技能是部署产物，经代码
+    review 后才上线，无需额外的信任列表机制。
 
     Security: this runs arbitrary commands written by the skill author.
     Callers must enable it explicitly (enable_shell_blocks); it is off by
-    default. Enable only for skills from trusted sources.
+    default. In backend services skills are deploy artifacts reviewed before
+    shipping — no separate trust-list mechanism is needed.
 
-    `shell` picks the interpreter: None means bash (Git Bash on Windows).
+    `shell` 指定解释器；为 None 时使用 bash（Windows 上为 Git Bash）。
+    失败时保留原始文本，单个命令出错不会破坏整个技能正文。
+
+    `shell` picks the interpreter; None means bash (Git Bash on Windows).
     On failure the block text is kept as-is, so one bad command does not
     destroy the whole skill body.
     """
@@ -113,6 +122,8 @@ def execute_shell_blocks(
             result = subprocess.run(
                 [interpreter, "-c", code],
                 capture_output=True,
+                # Git Bash 始终输出 UTF-8，与 Windows 系统区域设置无关；
+                # 若用系统默认编码（如 GBK）解码会崩溃，故强制指定。
                 # Git Bash emits UTF-8 regardless of the Windows locale;
                 # the locale default (e.g. GBK) would crash decoding.
                 encoding="utf-8",
@@ -127,6 +138,7 @@ def execute_shell_blocks(
         except (OSError, subprocess.TimeoutExpired) as e:
             return f"[shell execution failed: {e}]"
 
+    # 先处理围栏块，它们是更具体的模式。
     # Fenced blocks first: they are the more specific pattern.
     content = _FENCED_SHELL_RE.sub(lambda m: _run(m.group(1)), content)
     content = _SHELL_BLOCK_RE.sub(lambda m: _run(m.group(1)), content)

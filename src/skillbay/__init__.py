@@ -1,10 +1,13 @@
-"""skillbay: pluggable skill middleware for LangChain agents.
+"""skillbay: LangChain 可插拔技能中间件 / pluggable skill middleware for LangChain agents.
 
-Inspired by Claude Code's skill system and reworked for backend services:
-no human-approval state, skills frozen at deploy time, and a hard
-allowed-tools gate around every active skill.
+面向后端业务服务的 Agent 技能系统：技能在部署时加载并锁定，权限策略只有
+allow/deny 两态，每个激活技能受 allowed-tools 闸门约束。
 
-Quick start:
+Backend-oriented agent skill system: skills are loaded and frozen at deploy
+time, the permission policy is two-state (allow/deny), and every active
+skill is bounded by an allowed-tools gate.
+
+Quick start / 快速上手:
     from skillbay import SkillMiddleware
 
     mw = SkillMiddleware(skills_dirs=["app/skills"])
@@ -25,6 +28,7 @@ from .frontmatter import parse_frontmatter
 from .middleware import (
     AUDIT_ANNOUNCED,
     AUDIT_DENIED,
+    AUDIT_DISMISSED,
     AUDIT_INVOKED,
     AUDIT_REINJECTED,
     AUDIT_TOOL_BLOCKED,
@@ -47,6 +51,7 @@ __all__ = [
     "AUDIT_REINJECTED",
     "AUDIT_ANNOUNCED",
     "AUDIT_TOOL_BLOCKED",
+    "AUDIT_DISMISSED",
     # allowed-tools gate (pure function, unit-testable)
     "check_allowed_tools",
     # Skill model and loading
