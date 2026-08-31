@@ -2,7 +2,7 @@
 
 # skillbay
 
-**Pluggable skill middleware for LangChain agents — a skill system designed for business services.**
+**Pluggable skill middleware for LangChain — a skill system designed for business services.**
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
@@ -15,179 +15,128 @@
 
 ## Why skillbay
 
-Anthropic ships a quietly excellent skill system: a `SKILL.md` file turns a folder of
-procedures, references and scripts into something the model can discover on demand, load
-lazily, and follow precisely. It is one of the best answers so far to a recurring agent
-problem — *how does one agent carry many specialties without blowing its context window?*
+Anthropic proposes a remarkably good skill model: a single `SKILL.md` file turns a
+directory of procedures, references and scripts into capabilities the model can discover
+on demand, load lazily, and execute precisely. It is one of the standout contributions of
+Anthropic's Harness team in this area, solving a classic problem — *how does one agent
+carry many specialties without blowing its context window?*
 
-That mechanism is universal, but the original was purpose-built for one scenario: a
-developer's coding and work session. skillbay carries the mechanism into a different
-scenario — **business service agents**: a consumer-app support chat, an enterprise
-finance or HR assistant, an ops copilot wired into company systems. The context-window
-problem is the same; the ground rules are not:
+The mechanism itself is general, but the mainstream implementation was built for one
+specific scenario: a developer's coding and workbench. skillbay moves it into another —
+**business services**: a consumer app's support entrance, a company's finance/HR
+assistant, an ops copilot wired into internal systems. The context-window problem to
+solve is the same, but the runtime environment and rules are completely different.
 
-| | Claude Code: coding & personal work | skillbay: business service agents |
+| | Claude Code: coding / workbench | skillbay: business services |
 |---|---|---|
-| Who talks to the agent | A developer, able to judge "should this run?" | An end customer or an employee — nobody able to review a tool call, and no conversation that can hang on a confirmation prompt |
+| Who talks to the agent | A developer, able to judge "should this command run?" | An end customer or an employee — nobody able to review a tool call, and no conversation that can hang on a confirmation prompt |
 | What a skill is | A coding workflow, installed ad hoc by its user | A business capability — refund handling, reimbursement policy, leave inquiry — owned by the company and governed like any business code |
 | Whose authority the agent acts with | The developer's own account | The company's — customers never opted into the agent's internals, so blast radius must be bounded by design |
 | Session shape | One developer, one terminal session | Thousands of concurrent conversations, checkpointed and resumable |
 
 **skillbay** therefore ports the skill system 1:1 in semantics onto LangChain's middleware
 API, then deliberately diverges wherever the scenario — not the mechanics — demands it.
-The divergences are the interesting part — the rest of this document explains them.
+These divergences are the real content of this project.
 
-## Core design: three-layer progressive disclosure
+## Business transformation
 
-Like other skill systems, skillbay uses progressive disclosure to manage context cost:
-a budgeted menu (~1% of context) is injected every turn via `before_model`; the full
-SKILL.md body loads only when the model invokes the `skill` tool; sidecar files are
-read on demand by the agent's own file tools. The implementation details — delta
-accounting in agent state, 1% budget with graceful degradation, `Base directory` header
-for path resolution — live in the code; the key point is that a deployment carrying
-dozens of skills pays menu-sized cost per turn and body-sized cost only for the skill
-actually in use.
+### 1. Skills are deploy artifacts, not runtime discoveries
 
-## Business transformation: five deliberate divergences
+In Claude Code, the person who installs a skill is the person affected by it — runtime
+discovery and skill marketplaces are reasonable. A business service breaks that symmetry:
+the company operates the agent, while customers and employees bear the consequences. The
+skills also differ in kind — refund rules, reimbursement workflows and HR policies are
+business capabilities, not developer conveniences. A skill "appearing" in a mounted
+directory would put unreviewed behavior in front of customers: no review, no version, no
+rollback.
 
-### 1. No human approval — the contract is allow/deny
-
-The reference implementation inherits Claude Code's three-state permission model
-(`allow` / `ask` / `deny`). In a service scenario the person on the other end is a
-customer or an employee — not someone who can judge whether a tool call is safe, and a
-live conversation cannot hang on a confirmation dialog. The decision belongs to the
-platform, and it is made at deploy time. skillbay therefore makes the contract
-**two-valued**: the `permission_policy` seam returns `allow` or `deny` — nothing else.
-Any non-`allow` return value is denied.
-
-> Fail closed. That is the whole approval design.
-
-### 2. Skills are deploy artifacts, not runtime discoveries
-
-In Claude Code, the person who installs a skill is the person it affects — runtime
-discovery and marketplaces are reasonable self-service. A business service breaks that
-symmetry: the company operates the agent while customers and employees bear the
-consequences. And the skills differ in kind — refund rules, reimbursement workflows and
-HR policies are business capabilities, not developer conveniences. A skill "appearing"
-in a mounted directory would put unreviewed behavior in front of customers, with no
-review, no version, no rollback.
+In a coding agent, the person who installs a skill is the person who uses it, so runtime
+discovery is reasonable. In a business service, developers provide the skills, customers
+use them, and the company bears the consequences. Skills must therefore be supplied by the
+backend team — there is no runtime discovery.
 
 skillbay therefore loads the skill set **once, at construction, and freezes it**:
 
 - Skills live in git, go through code review, and ship with the release.
 - Runtime file changes have no effect until the process restarts.
-- Skill identity is the directory name; frontmatter `name` is display-only, so renames on
-  disk can't silently re-route behavior.
+- Skill identity is the directory name; the frontmatter `name` is display-only — renames on
+  disk cannot silently re-route behavior.
 
-### 3. The allowed-tools gate: blast radius as a first-class constraint
+### 2. The allowed-tools gate
 
-A service agent acts with the company's authority: a customer-service skill must never
-reach beyond its charter. A skill's frontmatter can declare `allowed-tools`; while that
-skill is active, the middleware's `wrap_tool_call` hook **enforces** the whitelist on
-every single tool call — the model is not trusted to comply, it is prevented.
+An agent in a business service acts as a customer-service/smart assistant — a
+customer-service skill must never reach tools beyond its charter. A skill's frontmatter can
+declare `allowed-tools`; while that skill is active, the middleware's `wrap_tool_call` hook
+**enforces** the whitelist on every single tool call — the model is not trusted to comply,
+it is prevented.
 
 The enforcement window is derived purely from the message history (no extra state to
 corrupt):
 
 - **Opens** when a skill call succeeds — its ToolMessage starts with `Launching skill:`.
-- **Closes** at the next real user message; `<system-reminder>` injections don't close it,
-  because they are part of the same task.
-- **Unions** when several skills are active, and **only tightens**: a skill without
-  `allowed-tools` can never widen an existing restriction.
-- **The `skill` tool itself is blocked inside the window**, closing the escalation path of
-  chaining into an unrestricted skill mid-turn.
+- **Closes** at the next real user message; `<system-reminder>` injections don't count as a
+  new task and don't close the window.
+- **Union**: when several skills are active at once, their whitelists are unioned, or
+  multiple skills are disallowed from being active simultaneously (a subagent mechanism can
+  be used to invoke multiple skills) — and it **only tightens**: a skill without
+  `allowed-tools` can never loosen an active restriction.
+- **The `skill` tool itself is blocked inside the window**: this closes the escalation path
+  of calling a restricted skill and then chaining into an unrestricted one.
 
-### 4. Denial is never a privilege-escalation path
+### 3. Accounting lives in agent state, not process globals
 
-Every activation path re-checks the policy:
+The reference implementation records announced/invoked skills in module-level dicts — fine
+for one developer's single-session process; wrong for a customer-service system serving
+thousands of resumable, checkpointed conversations at once. skillbay puts both ledgers in
+`SkillState` (an `AgentState` extension), which gives three things:
 
-- A denied skill call produces no `Launching skill:` marker, so the allowed-tools gate
-  never treats a rejected skill as active.
-- When a skill's body is re-injected after summarization, the policy is consulted again —
-  re-injection cannot become a bypass channel.
-
-### 5. Accounting lives in agent state, not process globals
-
-The reference implementation tracks announced/invoked skills in module-level dicts — fine
-when one developer owns one process, wrong for a service answering thousands of
-concurrent, checkpointed, resumable conversations. skillbay puts both
-ledgers in `SkillState` (an `AgentState` extension), which buys:
-
-- **Persistence** — accounting survives checkpoint/resume; no duplicate announcements after
-  a restart.
-- **Isolation** — per-thread state, no cross-talk between concurrent conversations.
+- **Persistence** — the ledgers survive checkpoints; no duplicate announcements after a
+  process resumes.
+- **Isolation** — per-thread state; concurrent conversations don't interfere with each
+  other.
 - **Summarization survival** — when a `SummarizationMiddleware` compresses away the turn
-  that invoked a skill, the invocation record survives in state. `before_model` notices the
-  missing `tool_call_id`, re-expands the body, and re-injects it as a system-reminder. The
-  skill's guidelines survive the compaction that killed the transcript.
+  that invoked the skill, the invocation record stays in state. `before_model` notices the
+  `tool_call_id` is gone from the message list, re-expands the body, and injects it as a
+  system-reminder. The skill's guidance survives the compaction that killed its transcript.
 
-## Resilience and security defaults
+### 4. Skill dismissal — the model can release skills it no longer needs
 
-- **One broken skill never breaks startup.** Frontmatter parsing never throws: it retries
-  with auto-quoting (the classic `paths: **/*.{ts,tsx}` hand-slap) and degrades to an empty
-  header. A skill missing its `description` is skipped with a warning, not fatal.
-- **Shell blocks are off by default.** SKILL.md can carry inline `` !`command` `` blocks whose
-  output replaces the block. That is arbitrary code execution by design, so it requires an
-  explicit `enable_shell_blocks=True` — a safety switch, not a preference.
-- **Auditability built in.** Five audit events (`skill_invoked`, `skill_denied`,
-  `skill_reinjected`, `skills_announced`, `tool_call_blocked`) flow through one
-  callback seam; wire it to your logging/metrics stack. Audit failures never take
-  down the agent.
-- **Context budget with graceful degradation.** If the skill listing exceeds its 1% budget,
-  descriptions are truncated to an equal share; in extremis only names are announced. The
-  discovery layer never crowds out the task itself.
+Other skill systems (Claude Code, Codex, Cursor, and every LangChain skill middleware we
+have seen) treat skill activation as fire-and-once: once a skill's body is injected, it
+occupies the context window until the conversation ends or the context is compacted away.
+That is fine for a developer session — the human knows when the task is done — but wrong
+for a service agent handling multi-turn conversations, which naturally drift across topics.
 
-## Concept mapping
+skillbay introduces **skill dismissal**: the model can call `skill_dismiss` to release a
+skill whose scope no longer matches the conversation. After dismissal:
 
-| Claude Code original | skillbay implementation |
-|---|---|
-| `skill_listing` attachment (incremental) | `before_model` hook: budgeted delta listing in a `<system-reminder>` user message |
-| `SkillTool.call` → newMessages | `@tool skill(skill, args)`: body expanded, returned as a ToolMessage |
-| `invoked_skills` (compaction survival) | `SkillState.skill_invocations` ledger + `before_model` re-injection |
-| `checkPermissions` (allow/ask/deny) | Two-valued `permission_policy` seam; non-`allow` is denied |
-| `allowed-tools` (advisory, client-enforced) | `wrap_tool_call` hard gate, window derived from message history |
-| Process-level skill ledgers | `announced_skills` / `skill_invocations` in `AgentState` |
+- The skill's full body is **no longer re-injected** into the post-compaction context.
+- The dismissal is **persisted in agent state** (survives checkpoint/resume).
+- An **audit event** (`skill_dismissed`) records which skill was dismissed and why.
 
-## Project layout
+The model decides when to dismiss based on the conversation — a customer who asks about
+refund policy and then pivots to shipping times does not need the refund skill's 12-step
+procedure consuming context for the rest of the session.
 
-```
-skillbay/
-├── src/skillbay/
-│   ├── middleware.py    # SkillMiddleware: skill tool, allowed-tools gate, before_model
-│   ├── core.py          # Skill model, directory loading, 1%-budget listing formatter
-│   ├── expansion.py     # SKILL.md expansion pipeline (fixed 5-step order)
-│   ├── frontmatter.py   # YAML header parsing with repair-and-retry
-│   └── __init__.py      # public API surface
-├── tests/               # pytest suite (pure functions + middleware integration)
-├── pyproject.toml       # uv-managed, Python >= 3.12, hatchling build
-├── README.md            # this file
-└── README.zh-CN.md      # Chinese version
-```
+It is a small mechanism, but it matters for long-lived service conversations, for two
+reasons: it reduces the number of tokens a backend service consumes, and it helps avoid
+topic drift.
 
-## Quick start
+## Robustness design
 
-```bash
-uv add skillbay            # or: pip install skillbay
-uv add pyyaml              # optional: enables full YAML frontmatter parsing
-```
+- **One broken skill never breaks startup.** Frontmatter parsing never throws: it tries the
+  raw text first, retries with auto-quoting on failure (guarding against the classic
+  `paths: **/*.{ts,tsx}` mistake), and degrades to an empty header as a last resort. A
+  skill missing its `description` is skipped with a warning, not fatal.
+- **Audit built in.** Six audit events (`skill_invoked`, `skill_denied`,
+  `skill_reinjected`, `skills_announced`, `tool_call_blocked`, `skill_dismissed`) flow
+  through one callback seam; wire it to your logging/metrics stack. Audit failures never
+  take down the agent.
+- **Context budget with graceful degradation.** When the listing exceeds its 1% budget,
+  each description is truncated to an equal share of what remains; in the extreme case only
+  names are announced. The discovery layer never crowds out the task itself.
 
-A skill is just a directory with a `SKILL.md` — here, a customer-service skill:
-
-```
-skills/
-└── refund-policy/
-    └── SKILL.md
-```
-
-```markdown
----
-description: Handle a refund request according to current company policy.
-allowed-tools: OrderQuery, RefundSubmit
-argument-hint: order ID
-arguments: order
----
-Handle the refund request for order $order. The policy checklist lives in ${SKILL_DIR}/policy.md.
-```
+### LangChain integration
 
 Wire it into any LangChain `create_agent` agent:
 
@@ -208,23 +157,10 @@ agent = create_agent(model, tools=[...], middleware=[mw])
 | Field | Required | Effect |
 |---|---|---|
 | `description` | yes | Listing text; drives model selection. Missing → skill skipped. |
-| `allowed-tools` | no | Whitelist enforced while the skill's window is open. |
+| `allowed-tools` | no | Tool whitelist enforced while the skill's window is open. |
 | `arguments` | no | Declares named arguments (`$foo`), mapped positionally. |
 | `argument-hint` | no | Human-facing hint for the argument string. |
 | `when_to_use` | no | Extra trigger guidance, appended to the listing description. |
-| `disable-model-invocation` | no | Hidden from the listing; user-triggered only. |
+| `disable-model-invocation` | no | Kept out of the listing; user-triggered only. |
 | `shell` | no | Interpreter for `` !`...` `` blocks (feature is off by default). |
-| `model`, `paths`, `version` | no | Parsed and carried; enforcement is on the roadmap. |
-
-## Roadmap
-
-- **Per-skill model override** — the `model` field is already parsed; switching execution
-  models per skill is the next growth point.
-- **Conditional activation** — the `paths` field is parsed; gating skill availability on
-  the working set is next.
-- **Listing localization** — the discovery layer currently speaks English only.
-
-## Contributing
-
-Code comments and docstrings are English and kept short; design rationale belongs in this
-README, not in file headers. Run `uv run pytest` and `uv run ruff check .` before submitting.
+| `model` / `paths` / `version` | no | Parsed and carried; enforcement is on the roadmap. |
