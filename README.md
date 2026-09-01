@@ -128,10 +128,9 @@ topic drift.
   raw text first, retries with auto-quoting on failure (guarding against the classic
   `paths: **/*.{ts,tsx}` mistake), and degrades to an empty header as a last resort. A
   skill missing its `description` is skipped with a warning, not fatal.
-- **Audit built in.** Six audit events (`skill_invoked`, `skill_denied`,
-  `skill_reinjected`, `skills_announced`, `tool_call_blocked`, `skill_dismissed`) flow
-  through one callback seam; wire it to your logging/metrics stack. Audit failures never
-  take down the agent.
+- **Audit built in.** Five audit events (`skill_invoked`, `skill_reinjected`,
+  `skills_announced`, `tool_call_blocked`, `skill_dismissed`) flow through one callback
+  seam; wire it to your logging/metrics stack. Audit failures never take down the agent.
 - **Context budget with graceful degradation.** When the listing exceeds its 1% budget,
   each description is truncated to an equal share of what remains; in the extreme case only
   names are announced. The discovery layer never crowds out the task itself.
@@ -145,8 +144,6 @@ from skillbay import SkillMiddleware
 
 mw = SkillMiddleware(
     skills_dirs=["skills"],
-    # Deploy-time whitelist: only chartered skills run, everything else is denied.
-    permission_policy=lambda skill, args: "allow" if skill.name in {"refund-policy", "faq"} else "deny",
     audit=lambda event: print(event),  # route to your observability stack
 )
 agent = create_agent(model, tools=[...], middleware=[mw])

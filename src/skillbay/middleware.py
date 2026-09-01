@@ -3,9 +3,6 @@
 面向后端业务服务的技能系统，核心设计：
 Backend-oriented skill system, core design:
 
-- 权限策略只有 allow/deny 两态，无需人工审批（后端没有可交互的人）。
-  Permission policy is two-state (allow/deny); no human approval needed
-  (there is no human to confirm in a backend service).
 - 技能是部署产物：构造时一次性加载并锁定，不做运行时动态发现。
   Skills are deploy artifacts: loaded once at construction, then frozen —
   no runtime discovery.
@@ -68,17 +65,9 @@ def _install_verbose_handler() -> None:
     PACKAGE_LOGGER.setLevel(logging.INFO)
 
 
-# 权限策略接口：(skill, args) -> "allow" | "deny"。
-# 后端服务在部署时确定权限，契约只有两个值。
-# Permission policy seam: (skill, args) -> "allow" | "deny".
-# Backend services resolve permissions at deploy time; the contract has
-# exactly two values.
-PermissionPolicy = Callable[[Skill, str | None], str]
-
 # 审计事件类型（技能系统中安全相关的节点）。
 # Audit event types (the security-relevant moments of the skill system).
 AUDIT_INVOKED = "skill_invoked"  # 技能展开成功 / skill expanded successfully
-AUDIT_DENIED = "skill_denied"  # 被权限策略拒绝 / rejected by the permission policy
 AUDIT_REINJECTED = "skill_reinjected"  # 摘要压缩后重注入 / body re-injected after summarization
 AUDIT_ANNOUNCED = (
     "skills_announced"  # 清单播报（首轮或增量）/ listing announced (first round or delta)
@@ -207,14 +196,6 @@ Important:
 """
 
 
-def _default_permission_policy(skill: Skill, args: str | None) -> str:
-    """默认策略：全部允许——契合「技能是经 review 的部署产物」的后端场景。
-    传入自定义策略可收紧权限。
-    Default policy: allow everything — fits the "skills are reviewed deploy
-    artifacts" backend scenario. Pass a custom policy to tighten it."""
-    return "allow"
-
-
 # ---------------------------------------------------------------------------
 # allowed-tools 闸门（纯函数，无需中间件实例，可独立单测）
 # allowed-tools gate (pure function, no middleware instance, unit-testable)
@@ -246,13 +227,13 @@ def check_allowed_tools(
       allowed-tools never loosen an existing restriction (restrictions only
       tighten).
 
-    为什么必须是成功的配对：权限策略拒绝技能调用时不会产生
-    "Launching skill:" ToolMessage，因此被拒绝的技能永远不会激活其
-    白名单——拒绝不能成为提权通道。
-    Why a successful pairing matters: when the policy denies a skill call
-    there is no "Launching skill:" ToolMessage, so a denied skill never
-    activates its whitelist — denial must not become a privilege-escalation
-    path.
+    为什么必须是成功的配对：技能调用失败（未知技能、展开出错）不会产生
+    "Launching skill:" ToolMessage，因此失败的技能永远不会激活其白名单——
+    失败不能成为提权通道。
+    Why a successful pairing matters: a failed skill call (unknown skill,
+    expansion error) produces no "Launching skill:" ToolMessage, so a broken
+    skill never activates its whitelist — failure must not become a
+    privilege-escalation path.
 
     返回 None 表示放行，返回原因字符串则交给模型。
     Returns None to allow, or a reason string to be returned to the model.
@@ -319,16 +300,10 @@ class SkillMiddleware(AgentMiddleware):
             默认回退到 8000 字符。
             Model context window size, used for the 1% listing budget;
             defaults to an 8000-char fallback.
-        permission_policy: 权限策略接口，(skill, args) -> "allow" | "deny"。
-            默认全部允许（技能经代码 review 后才上线）。非 "allow" 的返回值
-            一律视为拒绝并记录审计。
-            Policy seam, (skill, args) -> "allow" | "deny". Defaults to
-            allow-all (skills ship through code review). Any non-"allow"
-            return value is treated as "deny" and audited.
-        audit: 审计回调，(AuditEvent) -> None。调用、拒绝、工具拦截、
-            重注入和播报均会触发事件。
-            Audit callback, (AuditEvent) -> None. Invocations, denials,
-            tool blocks, re-injections and announcements all emit events.
+        audit: 审计回调，(AuditEvent) -> None。调用、工具拦截、重注入和
+            播报均会触发事件。
+            Audit callback, (AuditEvent) -> None. Invocations, tool blocks,
+            re-injections and announcements all emit events.
         enable_shell_blocks: 是否执行技能正文中的 !`...` 块。默认 False——
             这是安全开关，不是偏好设置。
             Whether to execute !`...` blocks in skill bodies. Default
@@ -345,14 +320,12 @@ class SkillMiddleware(AgentMiddleware):
         skills_dirs: list[str],
         *,
         context_window_tokens: int | None = None,
-        permission_policy: PermissionPolicy | None = None,
         audit: Callable[[AuditEvent], None] | None = None,
         enable_shell_blocks: bool = False,
         verbose: bool = False,
     ) -> None:
         self.skills = load_skills(skills_dirs)
         self.context_window_tokens = context_window_tokens
-        self.permission_policy = permission_policy or _default_permission_policy
         self.audit = audit
         self.enable_shell_blocks = enable_shell_blocks
         self.verbose = verbose
@@ -377,9 +350,9 @@ class SkillMiddleware(AgentMiddleware):
     # ------------------------------------------------------------------
 
     def _make_skill_tool(self):
-        """构建 skill 工具的闭包，使其可访问实例状态（技能表、权限策略、会话 ID）。
+        """构建 skill 工具的闭包，使其可访问实例状态（技能表、会话 ID）。
         Build the `skill` tool as a closure so it can reach instance state
-        (skill table, permission policy, session id).
+        (skill table, session id).
 
         输入 schema 通过 args_schema 显式声明，而非依赖函数签名——因为
         与 BaseTool 内部字段同名的参数会被 langchain-core 自动重命名，
@@ -418,17 +391,6 @@ class SkillMiddleware(AgentMiddleware):
                 return f"Unknown skill: {name}. Available: {known}"
             if found.disable_model_invocation:
                 return f"Skill {name} has disable-model-invocation: it can only be invoked by the user."
-
-            # -- 权限检查：两态策略（allow/deny）/ permission check: two-state policy --
-            decision = mw.permission_policy(found, raw_args)
-            if decision != "allow":
-                mw._audit(
-                    AUDIT_DENIED,
-                    skill=name,
-                    args=raw_args,
-                    detail=f"permission policy returned {decision!r}",
-                )
-                return f"Skill {name} execution blocked by permission policy."
 
             # -- 展开正文并作为 ToolMessage 返回 / expand the body and return it as a ToolMessage --
             content = expand_skill(
@@ -626,12 +588,6 @@ class SkillMiddleware(AgentMiddleware):
                 if target is None:
                     # 技能已被移除：删除记录，避免无限重试。
                     # Skill was removed: drop the record instead of retrying forever.
-                    del invocations[tc_id]
-                    continue
-                # 重注入前再次检查权限策略——被拒绝的技能不能通过此路径绕过。
-                # Re-check the permission policy before re-injection — a
-                # denied skill must not bypass the policy through this path.
-                if self.permission_policy(target, record["args"]) != "allow":
                     del invocations[tc_id]
                     continue
                 try:

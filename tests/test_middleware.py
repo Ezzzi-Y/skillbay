@@ -5,7 +5,6 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from skillbay import (
     AUDIT_ANNOUNCED,
-    AUDIT_DENIED,
     AUDIT_DISMISSED,
     AUDIT_INVOKED,
     AuditEvent,
@@ -92,14 +91,13 @@ def test_window_closes_on_real_user_message_only():
     assert check_allowed_tools(msgs, "Write", RESTRICTED) is None
 
 
-def test_denied_skill_never_activates_its_whitelist():
-    # The skill call was rejected, so there is no "Launching skill:" marker.
+def test_failed_skill_call_never_activates_its_whitelist():
+    # A skill call that did not launch successfully produces no
+    # "Launching skill:" marker, so its whitelist never activates.
     msgs = [
         HumanMessage("task"),
         skill_call("t1", "restricted"),
-        ToolMessage(
-            content="Skill restricted execution blocked by permission policy.", tool_call_id="t1"
-        ),
+        ToolMessage(content="Skill restricted failed to expand.", tool_call_id="t1"),
     ]
     assert check_allowed_tools(msgs, "Write", RESTRICTED) is None
 
@@ -182,32 +180,6 @@ def test_disable_model_invocation_is_rejected(tmp_path: Path):
     mw = SkillMiddleware(skills_dirs=[str(make_skills_dir(tmp_path))])
     result = mw.tools[0].invoke({"skill": "manual"})
     assert "disable-model-invocation" in result
-
-
-def test_permission_deny(tmp_path: Path):
-    events: list[AuditEvent] = []
-    mw = SkillMiddleware(
-        skills_dirs=[str(make_skills_dir(tmp_path))],
-        permission_policy=lambda skill, args: "deny",
-        audit=events.append,
-    )
-    result = mw.tools[0].invoke({"skill": "greet", "args": "x"})
-    assert "blocked by permission policy" in result
-    assert [e.event for e in events] == [AUDIT_DENIED]
-
-
-def test_unexpected_policy_return_is_denied(tmp_path: Path):
-    """Any return value other than "allow" is denied."""
-    events: list[AuditEvent] = []
-    mw = SkillMiddleware(
-        skills_dirs=[str(make_skills_dir(tmp_path))],
-        permission_policy=lambda skill, args: "oops",
-        audit=events.append,
-    )
-    result = mw.tools[0].invoke({"skill": "greet", "args": "x"})
-    assert "blocked by permission policy" in result
-    assert events[0].event == AUDIT_DENIED
-    assert "oops" in events[0].detail
 
 
 def test_audit_and_invocation_events(tmp_path: Path):

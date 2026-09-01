@@ -4,8 +4,8 @@
 
 skillbay 是一个面向 LangChain 的、可插拔的、面向后端业务服务的 Agent Skill 系统。
 核心思路 1:1 借鉴 Claude Code 的 Skill 系统（参考其 Python 移植版），但按后端
-场景做了三项改造：无人工审批（ask ≡ deny）、技能是部署产物（构造时加载并锁定）、
-allowed-tools 工具闸（wrap_tool_call 强制执行）。
+场景做了两项改造：技能是部署产物（构造时加载并锁定）、allowed-tools 工具闸
+（wrap_tool_call 强制执行）。
 
 完整的业务改造设计思路见 `README.md` / `README.zh-CN.md`，不要把设计论述写进
 py 文件头。包已从 `skillkit` 完成改名迁移，现在一律叫 `skillbay`。
@@ -42,11 +42,10 @@ py 文件头。包已从 `skillkit` 完成改名迁移，现在一律叫 `skillb
 - 技能记账（`announced_skills` / `skill_invocations`）放在 `SkillState`
   （AgentState 扩展），不放进程级 dict——为了随 checkpointer 持久化、按
   thread 隔离、resume 后不重复播报。
-- 权限策略契约只有 allow/deny 两个值；非 allow 的返回值一律拒绝。
 - allowed-tools 闸门 `check_allowed_tools` 是纯函数（便于单测）：生效窗口从
   成功的 "Launching skill:" ToolMessage 起，到下一条真实 user 消息止；多个
   技能的白名单取并集；限制只紧不松；窗口内连 skill 工具本身也拦（防提权）。
-- 被策略拒绝的技能调用不会激活其白名单（拒绝不能成为提权通道）。
+- 只有成功展开的技能调用才会激活其白名单（失败不能成为提权通道）。
 - `` !`命令` `` shell 块默认关闭（`enable_shell_blocks=False`），是安全开关。
   Windows 注意：PATH 里的 bash 可能解析到未配置的 WSL 存根，输出需按 UTF-8
   解码（`errors="replace"`，见 expansion.py）。

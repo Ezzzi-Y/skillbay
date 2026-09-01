@@ -94,7 +94,7 @@ skillbay 引入了**技能退场**：模型可以调用 `skill_dismiss` 来释�
 - **一个技能写坏，拖不垮启动。** frontmatter 解析永不抛异常：先试原文，失败后自动
   补引号重试（防住 `paths: **/*.{ts,tsx}` 这类经典手误），再失败降级为空头。缺
   `description` 的技能跳过并告警，而不是致命错误。
-- **审计内建。** 六类审计事件（`skill_invoked`、`skill_denied`、`skill_reinjected`、
+- **审计内建。** 五类审计事件（`skill_invoked`、`skill_reinjected`、
   `skills_announced`、`tool_call_blocked`、`skill_dismissed`）经由同一个回调缝发出，
   接到你的日志/指标栈即可。审计自身的故障不会拖垮 agent。
 - **上下文预算与优雅降级。** 清单超出 1% 预算时，各条描述均分剩余额度截断；极端
@@ -109,8 +109,6 @@ from skillbay import SkillMiddleware
 
 mw = SkillMiddleware(
     skills_dirs=["skills"],
-    # 部署时定死白名单：只有纳入职权的技能能跑，其余一律拒绝。
-    permission_policy=lambda skill, args: "allow" if skill.name in {"refund-policy", "faq"} else "deny",
     audit=lambda event: print(event),  # 接到你的可观测性栈
 )
 agent = create_agent(model, tools=[...], middleware=[mw])
