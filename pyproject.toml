@@ -3,7 +3,22 @@ name = "skillbay"
 version = "0.1.0"
 description = "Pluggable skill middleware for LangChain agents: a skill system designed for business services."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
+authors = [
+    { name = "Ezzi" },
+]
+keywords = ["langchain", "agent", "skill", "middleware", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
     "langchain>=1.0",
     "langgraph>=1.0",
@@ -14,11 +29,19 @@ dependencies = [
 [project.optional-dependencies]
 yaml = ["pyyaml>=6.0.1"]
 
+[project.urls]
+Homepage = "https://github.com/Ezzi/skillbay"
+Repository = "https://github.com/Ezzi/skillbay"
+Issues = "https://github.com/Ezzi/skillbay/issues"
+Documentation = "https://github.com/Ezzi/skillbay#readme"
+
 [dependency-groups]
 dev = [
     "pyyaml>=6.0.1",
     "pytest>=8.3",
     "ruff>=0.8",
+    "twine>=6.0",
+    "build>=1.0",
 ]
 
 [build-system]
