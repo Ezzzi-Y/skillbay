@@ -114,6 +114,10 @@ mw = SkillMiddleware(
 agent = create_agent(model, tools=[...], middleware=[mw])
 ```
 
+`skills_dirs` 的每个条目支持三种形态：单个技能目录本身（内含 `SKILL.md`）、
+技能父目录（`<dir>/<name>/SKILL.md`）、或再上一层的根目录（其子目录为分类
+文件夹，最多向下扫描两层）。
+
 ### Frontmatter 字段参考
 
 | 字段 | 必填 | 作用 |

@@ -149,6 +149,11 @@ mw = SkillMiddleware(
 agent = create_agent(model, tools=[...], middleware=[mw])
 ```
 
+Each `skills_dirs` entry accepts three shapes: a single skill directory itself
+(containing `SKILL.md`), a parent of skill directories
+(`<dir>/<name>/SKILL.md`), or a root one level higher whose subdirectories are
+category folders — scanned at most two levels down.
+
 ### Frontmatter reference
 
 | Field | Required | Effect |

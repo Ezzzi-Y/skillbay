@@ -291,11 +291,16 @@ class SkillMiddleware(AgentMiddleware):
     create_agent(model, middleware=[SkillMiddleware(...)]).
 
     Args:
-        skills_dirs: 技能目录列表，靠后的目录在同名冲突时优先。集合在构造时
+        skills_dirs: 技能目录列表，靠后的目录在同名冲突时优先。每个目录支持
+            三种形态：单个技能目录（内含 SKILL.md）、技能父目录、或再上层
+            的根目录（最多向下扫两层，见 core.load_skills）。集合在构造时
             一次性加载并锁定——部署时决定，运行时不变。
             Skill directories; later entries take priority on name conflicts.
-            The set is loaded once at construction and frozen — decided at
-            deploy time, unchanged at runtime.
+            Each entry may be a single skill directory (contains SKILL.md),
+            a parent of skills, or a root one level higher (scanned at most
+            two levels down; see core.load_skills). The set is loaded once
+            at construction and frozen — decided at deploy time, unchanged
+            at runtime.
         context_window_tokens: 模型上下文窗口大小，用于计算 1% 的清单预算；
             默认回退到 8000 字符。
             Model context window size, used for the 1% listing budget;

@@ -17,9 +17,9 @@ py 文件头。包已从 `skillkit` 完成改名迁移，现在一律叫 `skillb
     含 skill 工具、allowed-tools 闸门（`check_allowed_tools` 纯函数）、
     `before_model`（清单播报 + 压缩存活重注入）。改它之前先读 README 的
     「业务改造」章节。
-  - `core.py` — `Skill` 数据模型、目录加载（约定 `<skills_dir>/<name>/SKILL.md`，
-    靠后目录覆盖靠前目录、按 realpath 去重）、清单格式化（1% 上下文预算 +
-    三级降级）。
+  - `core.py` — `Skill` 数据模型、目录加载（传入目录支持三种形态：单个技能
+    目录本身、技能父目录、两层根目录；最多向下扫两层，靠后目录覆盖靠前目录、
+    按 realpath 去重）、清单格式化（1% 上下文预算 + 三级降级）。
   - `expansion.py` — SKILL.md 展开管线，五步顺序固定不能颠倒：
     Base directory 头 → 参数替换（$ARGUMENTS/$0/$foo）→ ${SKILL_DIR} →
     ${SESSION_ID} → 可选 !`命令` shell 块。

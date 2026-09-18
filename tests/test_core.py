@@ -51,6 +51,69 @@ def test_loose_markdown_files_are_ignored(tmp_path):
     assert load_skills([str(skills_dir)]) == []
 
 
+def test_load_skills_from_single_skill_directory(tmp_path):
+    alpha = write_skill(tmp_path, "alpha", "Alpha body.")
+
+    skills = load_skills([str(alpha)])
+    assert [s.name for s in skills] == ["alpha"]
+    assert skills[0].base_dir == str(alpha)
+    assert skills[0].source == str(alpha)
+
+
+def test_load_skills_from_two_level_root(tmp_path):
+    # Layout mirrors a synced vendor tree: root/category/<name>/SKILL.md.
+    root = tmp_path / "skills"
+    write_skill(root / "vendor", "alpha", "Alpha body.")
+    write_skill(root / "vendor", "beta", "Beta body.")
+    (root / "vendor" / "UPSTREAM.md").write_text("upstream notes", encoding="utf-8")
+    # A skill-local references dir without SKILL.md must not become a skill.
+    (root / "vendor" / "alpha" / "references").mkdir()
+    (root / "vendor" / "alpha" / "references" / "notes.md").write_text("x", encoding="utf-8")
+
+    skills = load_skills([str(root)])
+    assert [s.name for s in skills] == ["alpha", "beta"]
+    assert all(s.base_dir.endswith(s.name) for s in skills)
+
+
+def test_direct_skill_directory_is_not_descended(tmp_path):
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    (outer / "SKILL.md").write_text("---\ndescription: outer\n---\nOuter body.", encoding="utf-8")
+    write_skill(outer, "nested", "Nested body.")
+
+    skills = load_skills([str(outer)])
+    assert [s.name for s in skills] == ["outer"]
+
+
+def test_parent_shape_child_is_not_descended(tmp_path):
+    skills_dir = tmp_path / "skills"
+    write_skill(skills_dir, "alpha", "Alpha body.")
+    write_skill(skills_dir / "alpha", "nested", "Nested body.")
+
+    skills = load_skills([str(skills_dir)])
+    assert [s.name for s in skills] == ["alpha"]
+    assert skills[0].content.strip() == "Alpha body."
+
+
+def test_two_level_root_without_skills_is_empty(tmp_path):
+    root = tmp_path / "skills"
+    (root / "category").mkdir(parents=True)
+    (root / "category" / "readme.md").write_text("no skills here", encoding="utf-8")
+    assert load_skills([str(root)]) == []
+
+
+def test_mixed_shapes_override_by_directory_order(tmp_path):
+    parent = tmp_path / "parent"
+    write_skill(parent, "alpha", "parent version")
+    single = write_skill(tmp_path / "single", "alpha", "single version")
+
+    later_parent = load_skills([str(single), str(parent)])
+    assert later_parent[0].content.strip() == "parent version"
+
+    earlier_parent = load_skills([str(parent), str(single)])
+    assert earlier_parent[0].content.strip() == "single version"
+
+
 def test_frontmatter_fields_are_parsed(tmp_path):
     fm = (
         "description: d\n"
